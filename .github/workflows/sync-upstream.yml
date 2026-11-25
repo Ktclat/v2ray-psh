@@ -229,7 +229,6 @@ jobs:
             id="$(draft_info)"
           fi
           [[ "$id" =~ ^[0-9]+$ ]]
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/psh-release-notes.md"
           # Upload into the unpublished draft; GitHub sometimes returns a transient 5xx.
           for name in v2ray-psh-win-x64.zip SHA256SUMS.txt; do
             for attempt in 1 2 3; do
