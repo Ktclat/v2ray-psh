@@ -1,0 +1,189 @@
+name: Sync v2rayN and publish Windows build
+
+on:
+  schedule:
+    - cron: '27 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-upstream.yml'
+      - 'patches/**'
+      - 'sync/**'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2ray-psh-upstream
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    if: github.repository == 'Ktclat/v2ray-psh' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      base: ${{ steps.detect.outputs.base }}
+      release_tag: ${{ steps.detect.outputs.release_tag }}
+      update: ${{ steps.detect.outputs.update }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Detect upstream and patch changes
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$(git ls-remote --exit-code https://github.com/2dust/v2rayN.git refs/heads/master)"
+          read -r base ref <<< "$result"
+          [[ "$base" =~ ^[0-9a-f]{40}$ && "$ref" == refs/heads/master ]]
+          patch="$(sha256sum patches/terminal-commands.patch)"
+          tag="psh-${base:0:12}-${patch:0:12}"
+          response="$RUNNER_TEMP/v2ray-psh-release.json"
+          status="$(curl --silent --show-error --max-time 30 --retry 2 --output "$response" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          case "$status" in
+            404) update=true ;;
+            200)
+              jq -e '(.draft == false) and (.assets | length == 2)' "$response" >/dev/null
+              update=false
+              echo "Already published: $tag"
+              ;;
+            *) echo "Cannot establish release state: HTTP $status" >&2; exit 1 ;;
+          esac
+          printf 'base=%s\nrelease_tag=%s\nupdate=%s\n' "$base" "$tag" "$update" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: detect
+    if: needs.detect.outputs.update == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      tree: ${{ steps.patch.outputs.tree }}
+    env:
+      UPSTREAM_SHA: ${{ needs.detect.outputs.base }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Apply and validate downstream patch
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree="$(bash sync/prepare.sh "$UPSTREAM_SHA" upstream)"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+      - name: Test generated CMD and PowerShell in real shells
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $commands = Join-Path $env:RUNNER_TEMP 'proxy-commands-test'
+          dotnet run --project tests/ProxyCommandCheck.csproj -c Release -- $commands
+          cmd.exe /d /c (Join-Path $commands 'verify-cmd.cmd')
+          $script = Join-Path $commands 'proxy-env.ps1'
+          pwsh -NoProfile -NonInteractive -File tests/Verify-ProxyEnvironment.ps1 -CommandFile $script
+          powershell.exe -NoProfile -NonInteractive -File tests/Verify-ProxyEnvironment.ps1 -CommandFile $script
+      - name: Build both Windows menus and package WPF x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $src = Join-Path $PWD 'upstream/v2rayN'
+          $root = Join-Path $PWD 'dist'
+          $output = Join-Path $root 'v2ray-psh'
+          dotnet build "$src/v2rayN.Desktop/v2rayN.Desktop.csproj" -c Release -r win-x64
+          dotnet publish "$src/v2rayN.Windows/v2rayN.Windows.csproj" -c Release -r win-x64 --self-contained true -o $output
+          if (-not (Test-Path "$output/v2rayN.exe" -PathType Leaf)) { throw 'Expected WPF executable not found' }
+          Copy-Item upstream/LICENSE "$output/LICENSE"
+          Set-Content "$output/UPSTREAM.txt" "Source: https://github.com/2dust/v2rayN/commit/$env:UPSTREAM_SHA`nThis non-official build does not bundle proxy cores."
+          Compress-Archive -Path $output -DestinationPath (Join-Path $root 'v2ray-psh-win-x64.zip')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x64-package
+          path: dist/v2ray-psh-win-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [detect, windows]
+    if: needs.windows.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      UPSTREAM_SHA: ${{ needs.detect.outputs.base }}
+      RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+      EXPECTED_TREE: ${{ needs.windows.outputs.tree }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-x64-package
+          path: dist
+      - name: Independently verify source and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^psh-[0-9a-f]{12}-[0-9a-f]{12}$ && "$EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          tree="$(bash sync/prepare.sh "$UPSTREAM_SHA" upstream)"
+          [[ "$tree" == "$EXPECTED_TREE" ]] || { echo "Source tree changed between jobs" >&2; exit 1; }
+          python3 - <<'PY'
+          from pathlib import PurePosixPath
+          from zipfile import ZipFile
+          with ZipFile("dist/v2ray-psh-win-x64.zip") as z:
+              paths = [PurePosixPath(n.replace(chr(92), "/")) for n in z.namelist()]
+              assert all(not p.is_absolute() and ".." not in p.parts and p.parts[0] == "v2ray-psh" for p in paths)
+              assert PurePosixPath("v2ray-psh/v2rayN.exe") in paths
+              assert PurePosixPath("v2ray-psh/LICENSE") in paths
+              assert z.testzip() is None
+          PY
+          (cd dist && sha256sum v2ray-psh-win-x64.zip > SHA256SUMS.txt)
+      - name: Push tested source and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == Ktclat/v2ray-psh && "$GITHUB_REF" == refs/heads/main ]]
+          remote="https://github.com/$GITHUB_REPOSITORY.git"
+          parents=()
+          previous="$(git ls-remote "$remote" refs/heads/patched)"
+          if [[ -n "$previous" ]]; then
+            read -r parent ref <<< "$previous"
+            [[ "$parent" =~ ^[0-9a-f]{40}$ && "$ref" == refs/heads/patched ]]
+            git -C upstream fetch --no-tags "$remote" refs/heads/patched
+            [[ "$(git -C upstream rev-parse FETCH_HEAD)" == "$parent" ]]
+            parents=(-p "$parent")
+          fi
+          export GIT_AUTHOR_NAME='github-actions[bot]' GIT_COMMITTER_NAME='github-actions[bot]'
+          export GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          commit="$(printf 'Track 2dust/v2rayN %s\n\nPatch release %s\n' "$UPSTREAM_SHA" "$RELEASE_TAG" |
+            git -C upstream commit-tree "$EXPECTED_TREE" "${parents[@]}")"
+          git -C upstream -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push "$remote" "$commit:refs/heads/patched"
+          cat > "$RUNNER_TEMP/psh-release-notes.md" <<NOTES
+          Unofficial v2rayN Windows x64 WPF build with separate CMD and PowerShell tray commands.
+
+          - Upstream: https://github.com/2dust/v2rayN/commit/$UPSTREAM_SHA
+          - Complete corresponding source (GPL-3.0): https://github.com/$GITHUB_REPOSITORY/tree/$commit
+          - Self-contained .NET build; proxy cores are not bundled.
+          - CMD, PowerShell 7, Windows PowerShell 5.1 and both Windows menu builds were checked.
+          NOTES
+          gh release create "$RELEASE_TAG" dist/v2ray-psh-win-x64.zip dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$commit" --title "$RELEASE_TAG (Windows x64)" \
+            --notes-file "$RUNNER_TEMP/psh-release-notes.md" --prerelease

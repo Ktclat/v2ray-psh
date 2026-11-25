@@ -1,0 +1,221 @@
+diff --git a/v2rayN/ServiceLib/Common/TerminalProxyCommands.cs b/v2rayN/ServiceLib/Common/TerminalProxyCommands.cs
+new file mode 100644
+index 0000000000000000000000000000000000000000..895cfbba4f7bee2f6a4ffc5f2ffc4ceff06470b5
+--- /dev/null
++++ b/v2rayN/ServiceLib/Common/TerminalProxyCommands.cs
+@@ -0,0 +1,39 @@
++using System.Text;
++
++namespace ServiceLib.Common;
++
++internal enum TerminalProxyShell
++{
++    Cmd,
++    Posix,
++    PowerShell
++}
++
++internal static class TerminalProxyCommands
++{
++    internal static string Create(TerminalProxyShell shell, string httpProxy, string socksProxy)
++    {
++        if (shell == TerminalProxyShell.PowerShell)
++        {
++            return new StringBuilder()
++                .AppendLine($"$env:HTTP_PROXY = {PowerShellLiteral(httpProxy)}")
++                .AppendLine($"$env:HTTPS_PROXY = {PowerShellLiteral(httpProxy)}")
++                .AppendLine($"$env:ALL_PROXY = {PowerShellLiteral(socksProxy)}")
++                .ToString();
++        }
++
++        // Keep the existing CMD and POSIX output, including case and line order.
++        var verb = shell == TerminalProxyShell.Cmd ? "set" : "export";
++        return new StringBuilder()
++            .AppendLine($"{verb} http_proxy={httpProxy}")
++            .AppendLine($"{verb} https_proxy={httpProxy}")
++            .AppendLine($"{verb} all_proxy={socksProxy}")
++            .AppendLine()
++            .AppendLine($"{verb} HTTP_PROXY={httpProxy}")
++            .AppendLine($"{verb} HTTPS_PROXY={httpProxy}")
++            .AppendLine($"{verb} ALL_PROXY={socksProxy}")
++            .ToString();
++    }
++
++    private static string PowerShellLiteral(string value) => $"'{value.Replace("'", "''")}'";
++}
+diff --git a/v2rayN/ServiceLib/Resx/ResUI.Designer.cs b/v2rayN/ServiceLib/Resx/ResUI.Designer.cs
+index ba6f410c0ab7e62d945d102a0a5c9f164a052f2e..e3271917731fa4f4193a1148632d5312622a57cb 100644
+--- a/v2rayN/ServiceLib/Resx/ResUI.Designer.cs
++++ b/v2rayN/ServiceLib/Resx/ResUI.Designer.cs
+@@ -1023,6 +1023,20 @@ namespace ServiceLib.Resx {
+             }
+         }
+         
++        /// <summary>Looks up the localized Windows PowerShell copy command label.</summary>
++        public static string menuCopyProxyPowerShellToClipboard {
++            get {
++                return ResourceManager.GetString("menuCopyProxyPowerShellToClipboard", resourceCulture);
++            }
++        }
++
++        /// <summary>Looks up the localized Windows CMD copy command label.</summary>
++        public static string menuCopyProxyWindowsCmdToClipboard {
++            get {
++                return ResourceManager.GetString("menuCopyProxyWindowsCmdToClipboard", resourceCulture);
++            }
++        }
++
+         /// <summary>
+         ///   查找类似 Clone selected 的本地化字符串。
+         /// </summary>
+diff --git a/v2rayN/ServiceLib/Resx/ResUI.resx b/v2rayN/ServiceLib/Resx/ResUI.resx
+index 88eb99d934824cec5eda8e2407bb3c5e18f03338..df9f97205ad4c685aa3d1cb7bf5940c70a22f8bf 100644
+--- a/v2rayN/ServiceLib/Resx/ResUI.resx
++++ b/v2rayN/ServiceLib/Resx/ResUI.resx
+@@ -1398,6 +1398,12 @@
+   <data name="menuCopyProxyCmdToClipboard" xml:space="preserve">
+     <value>Copy proxy command to clipboard</value>
+   </data>
++  <data name="menuCopyProxyPowerShellToClipboard" xml:space="preserve">
++    <value>Copy PowerShell proxy commands</value>
++  </data>
++  <data name="menuCopyProxyWindowsCmdToClipboard" xml:space="preserve">
++    <value>Copy CMD proxy commands</value>
++  </data>
+   <data name="SpeedtestingTestFailedPart" xml:space="preserve">
+     <value>Starting retesting failed parts, {0} remaining. Press ESC to terminate...</value>
+   </data>
+diff --git a/v2rayN/ServiceLib/Resx/ResUI.zh-Hans.resx b/v2rayN/ServiceLib/Resx/ResUI.zh-Hans.resx
+index 2f5230e22c826ee9b6a107f3b41764dae4c925b0..ad79c7043c0cee292a9831ead129d7734e4d8798 100644
+--- a/v2rayN/ServiceLib/Resx/ResUI.zh-Hans.resx
++++ b/v2rayN/ServiceLib/Resx/ResUI.zh-Hans.resx
+@@ -1386,6 +1386,12 @@
+   <data name="menuCopyProxyCmdToClipboard" xml:space="preserve">
+     <value>复制终端代理命令至剪贴板</value>
+   </data>
++  <data name="menuCopyProxyPowerShellToClipboard" xml:space="preserve">
++    <value>复制 PowerShell 代理命令</value>
++  </data>
++  <data name="menuCopyProxyWindowsCmdToClipboard" xml:space="preserve">
++    <value>复制 CMD 代理命令</value>
++  </data>
+   <data name="SpeedtestingTestFailedPart" xml:space="preserve">
+     <value>开始对失败部分进行重新测试，剩余 {0} 个。可按 ESC 终止...</value>
+   </data>
+diff --git a/v2rayN/ServiceLib/Resx/ResUI.zh-Hant.resx b/v2rayN/ServiceLib/Resx/ResUI.zh-Hant.resx
+index b9ea096218e4b4aebd9c321f479785390f95353d..97a9bd5c3988876c5e1ce73083667b6f72dfc7b2 100644
+--- a/v2rayN/ServiceLib/Resx/ResUI.zh-Hant.resx
++++ b/v2rayN/ServiceLib/Resx/ResUI.zh-Hant.resx
+@@ -1395,6 +1395,12 @@
+   <data name="menuCopyProxyCmdToClipboard" xml:space="preserve">
+     <value>複製終端代理指令至剪貼簿</value>
+   </data>
++  <data name="menuCopyProxyPowerShellToClipboard" xml:space="preserve">
++    <value>複製 PowerShell 代理命令</value>
++  </data>
++  <data name="menuCopyProxyWindowsCmdToClipboard" xml:space="preserve">
++    <value>複製 CMD 代理命令</value>
++  </data>
+   <data name="SpeedtestingTestFailedPart" xml:space="preserve">
+     <value>開始對失敗部分進行重新測試，剩餘 {0} 個。可按 ESC 終止...</value>
+   </data>
+diff --git a/v2rayN/ServiceLib/ViewModels/StatusBarViewModel.cs b/v2rayN/ServiceLib/ViewModels/StatusBarViewModel.cs
+index 242020ff1c0bfec152882f69dbf8b4607710a2ac..df27a12f8902b087d3e29de1bf836e9732626b19 100644
+--- a/v2rayN/ServiceLib/ViewModels/StatusBarViewModel.cs
++++ b/v2rayN/ServiceLib/ViewModels/StatusBarViewModel.cs
+@@ -29,6 +29,11 @@ public partial class StatusBarViewModel : MyReactiveObject
+     public ReactiveCommand<RxVoid, RxVoid> SubUpdateCmd { get; }
+     public ReactiveCommand<RxVoid, RxVoid> SubUpdateViaProxyCmd { get; }
+     public ReactiveCommand<RxVoid, RxVoid> CopyProxyCmdToClipboardCmd { get; }
++    public ReactiveCommand<RxVoid, RxVoid> CopyProxyPowerShellToClipboardCmd { get; }
++    public bool ShowPowerShellProxyCommand => Utils.IsWindows();
++    public string CopyProxyCmdLabel => ShowPowerShellProxyCommand
++        ? ResUI.menuCopyProxyWindowsCmdToClipboard
++        : ResUI.menuCopyProxyCmdToClipboard;
+     public ReactiveCommand<RxVoid, RxVoid> NotifyLeftClickCmd { get; }
+     public ReactiveCommand<RxVoid, RxVoid> ShowWindowCmd { get; }
+     public ReactiveCommand<RxVoid, RxVoid> HideWindowCmd { get; }
+@@ -124,7 +129,11 @@ public partial class StatusBarViewModel : MyReactiveObject
+ 
+         CopyProxyCmdToClipboardCmd = ReactiveCommand.CreateFromTask(async () =>
+         {
+-            await CopyProxyCmdToClipboard();
++            await CopyProxyCmdToClipboard(Utils.IsWindows() ? TerminalProxyShell.Cmd : TerminalProxyShell.Posix);
++        });
++        CopyProxyPowerShellToClipboardCmd = ReactiveCommand.CreateFromTask(async () =>
++        {
++            await CopyProxyCmdToClipboard(TerminalProxyShell.PowerShell);
+         });
+ 
+         NotifyLeftClickCmd = ReactiveCommand.CreateFromTask(async () =>
+@@ -206,21 +215,11 @@ public partial class StatusBarViewModel : MyReactiveObject
+         await ChangeSystemProxyAsync(_config.SystemProxyItem.SysProxyType, false);
+     }
+ 
+-    private async Task CopyProxyCmdToClipboard()
++    private async Task CopyProxyCmdToClipboard(TerminalProxyShell shell)
+     {
+-        var cmd = Utils.IsWindows() ? "set" : "export";
+         var address = $"{Global.Loopback}:{AppManager.Instance.GetLocalPort(EInboundProtocol.socks)}";
+-
+-        var sb = new StringBuilder();
+-        sb.AppendLine($"{cmd} http_proxy={Global.HttpProtocol}{address}");
+-        sb.AppendLine($"{cmd} https_proxy={Global.HttpProtocol}{address}");
+-        sb.AppendLine($"{cmd} all_proxy={Global.Socks5Protocol}{address}");
+-        sb.AppendLine("");
+-        sb.AppendLine($"{cmd} HTTP_PROXY={Global.HttpProtocol}{address}");
+-        sb.AppendLine($"{cmd} HTTPS_PROXY={Global.HttpProtocol}{address}");
+-        sb.AppendLine($"{cmd} ALL_PROXY={Global.Socks5Protocol}{address}");
+-
+-        await SetClipboardDataInteraction.HandleSafe(sb.ToString());
++        var command = TerminalProxyCommands.Create(shell, $"{Global.HttpProtocol}{address}", $"{Global.Socks5Protocol}{address}");
++        await SetClipboardDataInteraction.HandleSafe(command);
+     }
+ 
+     private async Task AddServerViaClipboard()
+diff --git a/v2rayN/v2rayN.Desktop/App.axaml b/v2rayN/v2rayN.Desktop/App.axaml
+index 4ecb6337bde3aac20bbe1d888b43d61c64400b8f..74fe033e422d0818c1cccec2d7f86cccc5f86795 100644
+--- a/v2rayN/v2rayN.Desktop/App.axaml
++++ b/v2rayN/v2rayN.Desktop/App.axaml
+@@ -41,7 +41,11 @@
+                             Command="{Binding NotifyLeftClickCmd}"
+                             Header="{x:Static resx:ResUI.menuShowOrHideMainWindow}"
+                             IsVisible="{Binding BlIsNonWindows}" />
+-                        <NativeMenuItem Command="{Binding CopyProxyCmdToClipboardCmd}" Header="{x:Static resx:ResUI.menuCopyProxyCmdToClipboard}" />
++                        <NativeMenuItem Command="{Binding CopyProxyCmdToClipboardCmd}" Header="{Binding CopyProxyCmdLabel}" />
++                        <NativeMenuItem
++                            Command="{Binding CopyProxyPowerShellToClipboardCmd}"
++                            Header="{x:Static resx:ResUI.menuCopyProxyPowerShellToClipboard}"
++                            IsVisible="{Binding ShowPowerShellProxyCommand}" />
+                         <NativeMenuItemSeparator />
+                         <NativeMenuItem
+                             Command="{Binding SystemProxyClearCmd}"
+diff --git a/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml b/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml
+index 1b31a1a52a2f4c28b4be5b62687930f17eae3f64..a06daad4f7ac066fa1d6bdb4c9b0a908bbe3ce4f 100644
+--- a/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml
++++ b/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml
+@@ -191,7 +191,11 @@
+                     <MenuItem
+                         x:Name="menuCopyProxyCmdToClipboard"
+                         Height="{StaticResource MenuItemHeight}"
+-                        Header="{x:Static resx:ResUI.menuCopyProxyCmdToClipboard}" />
++                        Header="{x:Static resx:ResUI.menuCopyProxyWindowsCmdToClipboard}" />
++                    <MenuItem
++                        x:Name="menuCopyProxyPowerShellToClipboard"
++                        Height="{StaticResource MenuItemHeight}"
++                        Header="{x:Static resx:ResUI.menuCopyProxyPowerShellToClipboard}" />
+                     <Separator />
+                     <MenuItem
+                         x:Name="menuExit"
+diff --git a/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml.cs b/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml.cs
+index 4300d1ae3e51590c0a3d2e15b0c63a8f76d091b9..7ec74ee81e1e90ae0eae1e029eadc48358cdbbf7 100644
+--- a/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml.cs
++++ b/v2rayN/v2rayN.Windows/Views/StatusBarView.xaml.cs
+@@ -34,6 +34,7 @@ public partial class StatusBarView
+             this.BindCommand(ViewModel, vm => vm.SubUpdateViaProxyCmd, v => v.menuSubUpdateViaProxy2).DisposeWith(disposables);
+ 
+             this.BindCommand(ViewModel, vm => vm.CopyProxyCmdToClipboardCmd, v => v.menuCopyProxyCmdToClipboard).DisposeWith(disposables);
++            this.BindCommand(ViewModel, vm => vm.CopyProxyPowerShellToClipboardCmd, v => v.menuCopyProxyPowerShellToClipboard).DisposeWith(disposables);
+ 
+             this.OneWayBind(ViewModel, vm => vm.RunningServerToolTipText, v => v.tbNotify.ToolTipText).DisposeWith(disposables);
+             this.OneWayBind(ViewModel, vm => vm.NotifyLeftClickCmd, v => v.tbNotify.LeftClickCommand).DisposeWith(disposables);
