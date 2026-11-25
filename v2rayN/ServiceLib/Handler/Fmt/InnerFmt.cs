@@ -177,9 +177,14 @@ public class InnerFmt : BaseFmt
         }
         var customOutboundFilePath = string.Empty;
         if (jsonObj.TryGetPropertyValue("CustomOutboundObj", out var customOutboundNode)
-            && customOutboundNode is JsonObject or JsonArray)
+            && customOutboundNode is JsonObject customOutboundObj)
         {
-            var customOutboundContent = JsonUtils.Serialize(customOutboundNode, indented: true, nullValue: true);
+            var customOutboundContent = JsonUtils.Serialize(customOutboundObj, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
             customOutboundFilePath = WriteAllText(customOutboundContent);
             jsonObj.Remove("CustomOutboundObj");
         }
@@ -239,9 +244,9 @@ public class InnerFmt : BaseFmt
             if (!customOutboundFilePath.IsNullOrEmpty()
                 && File.Exists(customOutboundFilePath)
                 && File.ReadAllText(customOutboundFilePath) is { Length: > 0 } customOutboundContent
-                && JsonUtils.ParseJson(customOutboundContent) is (JsonObject or JsonArray) and { } customOutboundNode)
+                && JsonUtils.ParseJson(customOutboundContent) is JsonObject customOutboundObj)
             {
-                jsonObj["CustomOutboundObj"] = customOutboundNode;
+                jsonObj["CustomOutboundObj"] = customOutboundObj;
                 jsonObj.Remove("Address");
             }
         }

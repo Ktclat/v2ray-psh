@@ -8,8 +8,6 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
     [Reactive] public partial bool AddCommonHosts { get; set; }
     [Reactive] public partial bool FakeIP { get; set; }
     [Reactive] public partial string FakeIPRange { get; set; }
-    [Reactive] public partial bool FakeIPv6 { get; set; }
-    [Reactive] public partial string FakeIPv6Range { get; set; }
     [Reactive] public partial bool BlockBindingQuery { get; set; }
     [Reactive] public partial bool BlockAAAAQuery { get; set; }
     [Reactive] public partial string DirectDNS { get; set; }
@@ -37,8 +35,7 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
     [Reactive] public partial bool RayCustomDNSEnableCompatible { get; set; }
     [Reactive] public partial bool SBCustomDNSEnableCompatible { get; set; }
 
-    [ObservableAsProperty] public partial bool IsSimpleDNSEnabled { get; }
-    [ObservableAsProperty] public partial bool IsFakeIPv6Available { get; }
+    public bool IsSimpleDNSEnabled => !(RayCustomDNSEnableCompatible && SBCustomDNSEnableCompatible);
 
     public ReactiveCommand<RxVoid, RxVoid> SaveCmd { get; }
     public ReactiveCommand<RxVoid, RxVoid> ImportDefConfig4V2rayCompatibleCmd { get; }
@@ -46,7 +43,7 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
 
     public DNSSettingViewModel()
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
         SaveCmd = ReactiveCommand.CreateFromTask(SaveSettingAsync);
 
         ImportDefConfig4V2rayCompatibleCmd = ReactiveCommand.CreateFromTask(async () =>
@@ -63,31 +60,20 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
             await Task.CompletedTask;
         });
 
-        _isSimpleDNSEnabledHelper = this.WhenAnyValue(
-                x => x.RayCustomDNSEnableCompatible,
-                x => x.SBCustomDNSEnableCompatible,
-                (a, b) => !(a && b))
-            .ToProperty(this, nameof(IsSimpleDNSEnabled));
-
-        _isFakeIPv6AvailableHelper = this.WhenAnyValue(
-                x => x.FakeIP,
-                x => x.BlockAAAAQuery,
-                (fakeIP, blockAAAA) => fakeIP && !blockAAAA)
-            .ToProperty(this, nameof(IsFakeIPv6Available));
+        this.WhenAnyValue(x => x.RayCustomDNSEnableCompatible, x => x.SBCustomDNSEnableCompatible)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(IsSimpleDNSEnabled)));
 
         _ = Init();
     }
 
     private async Task Init()
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
         var item = _config.SimpleDNSItem;
         UseSystemHosts = item.UseSystemHosts ?? false;
         AddCommonHosts = item.AddCommonHosts ?? false;
         FakeIP = item.FakeIP ?? false;
         FakeIPRange = item.FakeIPRange ?? string.Empty;
-        FakeIPv6 = item.FakeIPv6 ?? false;
-        FakeIPv6Range = item.FakeIPv6Range ?? Global.FakeIPv6Ranges.First();
         BlockBindingQuery = item.BlockBindingQuery ?? false;
         BlockAAAAQuery = item.BlockAAAAQuery ?? false;
         DirectDNS = item.DirectDNS ?? string.Empty;
@@ -101,7 +87,7 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
         ParallelQuery = item.ParallelQuery ?? false;
         ServeStale = item.ServeStale ?? false;
         EnableHappyEyeballs = item.EnableHappyEyeballs ?? false;
-        var item1 = await ConfigDbQuery.GetDNSItem(ECoreType.Xray);
+        var item1 = await AppManager.Instance.GetDNSItem(ECoreType.Xray);
         RayCustomDNSEnableCompatible = item1.Enabled;
         UseSystemHostsCompatible = item1.UseSystemHosts;
         DomainStrategy4FreedomCompatible = item1?.DomainStrategy4Freedom ?? string.Empty;
@@ -109,7 +95,7 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
         NormalDNSCompatible = item1?.NormalDNS ?? string.Empty;
         TunDNSCompatible = item1?.TunDNS ?? string.Empty;
 
-        var item2 = await ConfigDbQuery.GetDNSItem(ECoreType.sing_box);
+        var item2 = await AppManager.Instance.GetDNSItem(ECoreType.sing_box);
         SBCustomDNSEnableCompatible = item2.Enabled;
         DomainStrategy4Freedom2Compatible = item2?.DomainStrategy4Freedom ?? string.Empty;
         DomainDNSAddress2Compatible = item2?.DomainDNSAddress ?? string.Empty;
@@ -119,19 +105,10 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
 
     private async Task SaveSettingAsync()
     {
-        if (IsSimpleDNSEnabled && IsFakeIPv6Available && FakeIPv6
-            && !FakeIPUtils.TryParseIPv6Range(FakeIPv6Range, out _, out _))
-        {
-            NoticeManager.Instance.Enqueue(ResUI.FillCorrectFakeIPv6Range);
-            return;
-        }
-
         _config.SimpleDNSItem.UseSystemHosts = UseSystemHosts;
         _config.SimpleDNSItem.AddCommonHosts = AddCommonHosts;
         _config.SimpleDNSItem.FakeIP = FakeIP;
         _config.SimpleDNSItem.FakeIPRange = FakeIPRange;
-        _config.SimpleDNSItem.FakeIPv6 = FakeIPv6;
-        _config.SimpleDNSItem.FakeIPv6Range = FakeIPv6Range;
         _config.SimpleDNSItem.BlockBindingQuery = BlockBindingQuery;
         _config.SimpleDNSItem.BlockAAAAQuery = BlockAAAAQuery;
         _config.SimpleDNSItem.DirectDNS = DirectDNS;
@@ -198,24 +175,24 @@ public partial class DNSSettingViewModel : MyReactiveObject, ICloseable
             }
         }
 
-        var item1 = await ConfigDbQuery.GetDNSItem(ECoreType.Xray);
+        var item1 = await AppManager.Instance.GetDNSItem(ECoreType.Xray);
         item1.Enabled = RayCustomDNSEnableCompatible;
         item1.DomainStrategy4Freedom = DomainStrategy4FreedomCompatible;
         item1.DomainDNSAddress = DomainDNSAddressCompatible;
         item1.UseSystemHosts = UseSystemHostsCompatible;
         item1.NormalDNS = NormalDNSCompatible;
         item1.TunDNS = TunDNSCompatible;
-        await ConfigDbHandler.SaveDNSItems(item1);
+        await ConfigHandler.SaveDNSItems(_config, item1);
 
-        var item2 = await ConfigDbQuery.GetDNSItem(ECoreType.sing_box);
+        var item2 = await AppManager.Instance.GetDNSItem(ECoreType.sing_box);
         item2.Enabled = SBCustomDNSEnableCompatible;
         item2.DomainStrategy4Freedom = DomainStrategy4Freedom2Compatible;
         item2.DomainDNSAddress = DomainDNSAddress2Compatible;
         item2.NormalDNS = JsonUtils.Serialize(JsonUtils.Deserialize<Dns4Sbox>(NormalDNS2Compatible));
         item2.TunDNS = JsonUtils.Serialize(JsonUtils.Deserialize<Dns4Sbox>(TunDNS2Compatible));
-        await ConfigDbHandler.SaveDNSItems(item2);
+        await ConfigHandler.SaveDNSItems(_config, item2);
 
-        await ConfigTextHandler.SaveConfig();
+        await ConfigHandler.SaveConfig(_config);
         RequestClose?.Invoke(this, EventArgs.Empty);
     }
 }

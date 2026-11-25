@@ -20,7 +20,7 @@ public partial class SubSettingViewModel : MyReactiveObject
 
     public SubSettingViewModel()
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
 
         var canEditRemove = this.WhenAnyValue(
            x => x.SelectedSource,
@@ -55,7 +55,7 @@ public partial class SubSettingViewModel : MyReactiveObject
 
     public async Task RefreshSubItems()
     {
-        SubItems.ReplaceRange(await ConfigDbQuery.SubItems());
+        SubItems.ReplaceRange(await AppManager.Instance.SubItems());
     }
 
     public async Task EditSubAsync(bool blNew)
@@ -67,7 +67,7 @@ public partial class SubSettingViewModel : MyReactiveObject
         }
         else
         {
-            item = await ConfigDbQuery.GetSubItem(SelectedSource?.Id);
+            item = await AppManager.Instance.GetSubItem(SelectedSource?.Id);
             if (item is null)
             {
                 return;
@@ -90,7 +90,7 @@ public partial class SubSettingViewModel : MyReactiveObject
 
         foreach (var it in SelectedSources ?? [SelectedSource])
         {
-            await ConfigDbHandler.DeleteSubItem(it.Id);
+            await ConfigHandler.DeleteSubItem(_config, it.Id);
         }
         await RefreshSubItems();
         NoticeManager.Instance.Enqueue(ResUI.OperationSuccess);

@@ -22,7 +22,7 @@ public partial class AddServer2ViewModel : MyReactiveObject, ICloseable
 
     public AddServer2ViewModel(ProfileItem profileItem)
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
 
         BrowseServerCmd = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -69,7 +69,7 @@ public partial class AddServer2ViewModel : MyReactiveObject, ICloseable
             IsSingboxEndpoint = IsSingboxEndpoint ? true : null,
         });
 
-        if (await ConfigDbHandler.EditCustomServer(SelectedSource) == 0)
+        if (await ConfigHandler.EditCustomServer(_config, SelectedSource) == 0)
         {
             NoticeManager.Instance.Enqueue(ResUI.OperationSuccess);
             RequestClose?.Invoke(this, EventArgs.Empty);
@@ -87,10 +87,10 @@ public partial class AddServer2ViewModel : MyReactiveObject, ICloseable
             return;
         }
 
-        var item = await ConfigDbQuery.GetProfileItem(SelectedSource.IndexId);
+        var item = await AppManager.Instance.GetProfileItem(SelectedSource.IndexId);
         item ??= SelectedSource;
         item.Address = fileName;
-        var result = item.ConfigType == EConfigType.Outbound ? await ConfigDbHandler.AddCustomOutboundServer(item, false) : await ConfigDbHandler.AddCustomServer(item, false);
+        var result = item.ConfigType == EConfigType.Outbound ? await ConfigHandler.AddCustomOutboundServer(_config, item, false) : await ConfigHandler.AddCustomServer(_config, item, false);
         if (result == 0)
         {
             NoticeManager.Instance.Enqueue(ResUI.SuccessfullyImportedCustomServer);

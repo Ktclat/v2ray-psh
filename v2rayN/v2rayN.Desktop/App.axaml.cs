@@ -65,7 +65,7 @@ public partial class App : Application
                 return;
             }
 
-            if (!ConfigTextHandler.Config.UiItem.MacOSShowInDock)
+            if (!AppManager.Instance.Config.UiItem.MacOSShowInDock)
             {
                 MacAppUtils.SetActivationPolicyAccessory();
             }
@@ -76,7 +76,7 @@ public partial class App : Application
 
     private static void RestoreMacOSAccessoryPolicyAfterMiniaturize(MainWindow mainWindow)
     {
-        if (ConfigTextHandler.Config.UiItem.MacOSShowInDock)
+        if (AppManager.Instance.Config.UiItem.MacOSShowInDock)
         {
             return;
         }
@@ -98,7 +98,7 @@ public partial class App : Application
 
     private static void RestoreMacOSAccessoryPolicy(MainWindow mainWindow)
     {
-        if (ConfigTextHandler.Config.UiItem.MacOSShowInDock || MacAppUtils.IsWindowMiniaturized(mainWindow))
+        if (AppManager.Instance.Config.UiItem.MacOSShowInDock || MacAppUtils.IsWindowMiniaturized(mainWindow))
         {
             return;
         }

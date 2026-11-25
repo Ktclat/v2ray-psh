@@ -4,7 +4,7 @@ public partial class ClashConnectionsViewModel : MyReactiveObject
 {
     public ClashConnectionsViewModel()
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
         AutoRefresh = _config.ClashUIItem.ConnectionsAutoRefresh;
 
         var canEditRemove = this.WhenAnyValue(

@@ -17,7 +17,7 @@ public partial class BackupAndRestoreViewModel : MyReactiveObject
 
     public BackupAndRestoreViewModel()
     {
-        _config = ConfigTextHandler.Config;
+        _config = AppManager.Instance.Config;
 
         WebDavCheckCmd = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -44,7 +44,7 @@ public partial class BackupAndRestoreViewModel : MyReactiveObject
     {
         DisplayOperationMsg();
         _config.WebDavItem = SelectedSource;
-        _ = await ConfigTextHandler.SaveConfig();
+        _ = await ConfigHandler.SaveConfig(_config);
 
         var result = await WebDavManager.Instance.CheckConnection();
         if (result)

@@ -31,7 +31,7 @@ public class PacManager
 
     private async Task<byte[]> InitText(int httpPort)
     {
-        var customSystemProxyPacPath = ConfigTextHandler.Config.SystemProxyItem.CustomSystemProxyPacPath;
+        var customSystemProxyPacPath = AppManager.Instance.Config.SystemProxyItem.CustomSystemProxyPacPath;
         var fileName = customSystemProxyPacPath.IsNotEmpty() && File.Exists(customSystemProxyPacPath)
             ? customSystemProxyPacPath
             : Path.Combine(Utils.GetConfigPath(), "pac.txt");
@@ -65,17 +65,11 @@ public class PacManager
         {
             while (!token.IsCancellationRequested)
             {
-                try
-                {
-                    using var client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
-                    await using var stream = client.GetStream();
-                    _ = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
-                    await stream.WriteAsync(_writeContent, token).ConfigureAwait(false);
-                    await stream.FlushAsync(token).ConfigureAwait(false);
-                }
-                catch
-                {
-                }
+                using var client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                await using var stream = client.GetStream();
+                _ = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
+                await stream.WriteAsync(_writeContent, token).ConfigureAwait(false);
+                await stream.FlushAsync(token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)

@@ -9,7 +9,7 @@ public static class CoreConfigHandler
 
     public static async Task<RetResult> GenerateClientConfig(CoreConfigContext context, string? fileName)
     {
-        var config = ConfigTextHandler.Config;
+        var config = AppManager.Instance.Config;
         var result = new RetResult();
         var node = context.Node;
 
@@ -65,9 +65,7 @@ public static class CoreConfigHandler
             }
             if (!File.Exists(addressFileName))
             {
-                var message = $"{ResUI.FailedReadConfiguration}: {addressFileName}";
-                Logging.SaveLog($"{_tag}: {message}");
-                ret.Msg = message;
+                ret.Msg = ResUI.FailedGenDefaultConfiguration;
                 return ret;
             }
             File.Copy(addressFileName, fileName);
@@ -76,9 +74,7 @@ public static class CoreConfigHandler
             //check again
             if (!File.Exists(fileName))
             {
-                var message = $"{ResUI.FailedReadConfiguration}: {fileName}";
-                Logging.SaveLog($"{_tag}: {message}");
-                ret.Msg = message;
+                ret.Msg = ResUI.FailedGenDefaultConfiguration;
                 return ret;
             }
 

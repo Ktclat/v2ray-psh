@@ -9,6 +9,7 @@ public record FileDownloadState
     public bool Completed { get; init; } = false;
 
     public Exception? Error { get; init; }
+    public bool IsFailed => Error != null;
 }
 
 public record FileDownloadRequest

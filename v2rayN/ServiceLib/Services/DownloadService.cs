@@ -1,73 +1,33 @@
+using System.Net.Http.Headers;
+
 namespace ServiceLib.Services;
 
 /// <summary>
-///     Download
+/// Download
 /// </summary>
-public class DownloadService : IDisposable
+public class DownloadService
 {
-    private static readonly string _tag = "DownloadService";
-
-    public HttpMessageHandler Handler { get; init; } = HttpClientHelper.Instance.DirectHandler;
-
-    public bool DisposeHandler { get; init; } = false;
-
-    public DownloaderHelper DownloaderHelper
-    {
-        get
-        {
-            field ??= new DownloaderHelper
-            {
-                Handler = Handler,
-                DisposeHandler = false,
-            };
-            return field;
-        }
-    }
-
     public event EventHandler<UpdateResult>? UpdateCompleted;
 
     public event ErrorEventHandler? Error;
 
-    public static async Task<DownloadService> CreateDownloadServiceWithCheck(bool preferProxy = true)
-    {
-        var webProxy = await CheckProxy(preferProxy);
-        var cookieContainer = new CookieContainer();
-        if (webProxy is not null)
-        {
-            return new DownloadService
-            {
-                Handler = HttpClientHelper.CreateProxySocketsHttpHandler(webProxy, cookieContainer),
-                DisposeHandler = true,
-            };
-        }
-        return new DownloadService
-        {
-            Handler = HttpClientHelper.CreateSocketsHttpHandler(false, cookieContainer),
-            DisposeHandler = true,
-        };
-    }
+    public string? AcceptHeader { get; init; }
 
-    public static DownloadService CreateDownloadServiceWithFallback(bool preferProxy = true)
-    {
-        return new DownloadService
-        {
-            Handler = HttpClientHelper.Instance.CreateFallbackHandler(preferProxy, new()),
-            DisposeHandler = true,
-        };
-    }
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
+
+    private static readonly string _tag = "DownloadService";
 
     /// <summary>
-    ///     Downloads data with the specified proxy and reports progress messages.
+    /// Downloads data with the specified proxy and reports progress messages.
     /// </summary>
-    public async Task<int> DownloadDataAsync(string url, Func<bool, string, Task> updateFunc,
-        CancellationToken cancellationToken = default)
+    public async Task<int> DownloadDataAsync(string url, IWebProxy webProxy, Func<bool, string, Task> updateFunc, CancellationToken cancellationToken = default)
     {
         try
         {
-            await DownloaderHelper.DownloadDataAsync4Speed(
-                url,
-                OnProgress,
-                cancellationToken);
+            await DownloaderHelper.Instance.DownloadDataAsync4Speed(webProxy,
+                  url,
+                  OnProgress,
+                  cancellationToken);
 
             void OnProgress(string message)
             {
@@ -91,44 +51,24 @@ public class DownloadService : IDisposable
     }
 
     /// <summary>
-    ///     Downloads a file and reports progress through events.
+    /// Downloads a file and reports progress through events.
     /// </summary>
-    public async Task DownloadFileAsync(FileDownloadRequest request, CancellationToken cancellationToken = default)
+    public async Task DownloadFileAsync(FileDownloadRequest request, bool blProxy, CancellationToken cancellationToken = default)
     {
         try
         {
             UpdateCompleted?.Invoke(this, new UpdateResult(false, $"{ResUI.Downloading}   {request.FileUrl}"));
 
-            Exception? downloadError = null;
-
-            await DownloaderHelper.DownloadFileAsync(
+            var webProxy = await GetWebProxy(blProxy, cancellationToken);
+            await DownloaderHelper.Instance.DownloadFileAsync(webProxy,
                 request,
                 OnProgress,
                 cancellationToken);
 
-            if (downloadError != null)
-            {
-                Logging.SaveLog(_tag, downloadError);
-                Error?.Invoke(this, new ErrorEventArgs(downloadError));
-            }
-
             void OnProgress(FileDownloadState state)
             {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-                if (state.Error != null)
-                {
-                    downloadError = state.Error;
-                    return;
-                }
-
-                var speedText = $"{Utils.HumanFy((long)state.SpeedBytesPerSecond / 1024)}/s";
-                var progressText = $"{Utils.HumanFy(state.DownloadedBytes / 1024)}/{Utils.HumanFy(state.TotalBytes / 1024)}";
-
-                UpdateCompleted?.Invoke(this,
-                    new UpdateResult(state.Completed, $"{speedText} | {progressText}"));
+                cancellationToken.ThrowIfCancellationRequested();
+                UpdateCompleted?.Invoke(this, new UpdateResult(state.Completed, $"{Utils.HumanFy((long)state.SpeedBytesPerSecond / 1024)}/s | {Utils.HumanFy(state.DownloadedBytes / 1024)}/{Utils.HumanFy(state.TotalBytes / 1024)}"));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -138,122 +78,134 @@ public class DownloadService : IDisposable
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
+
             Error?.Invoke(this, new ErrorEventArgs(ex));
+            if (ex.InnerException != null)
+            {
+                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+            }
         }
     }
 
-    public async Task DownloadSmallFilesAsync(List<FileDownloadRequest> requests,
-        CancellationToken cancellationToken = default)
+    public async Task DownloadSmallFilesAsync(List<FileDownloadRequest> requests, bool blProxy, CancellationToken cancellationToken = default)
     {
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Exception? firstError = null;
-
         try
         {
             UpdateCompleted?.Invoke(this, new UpdateResult(false, $"{ResUI.Downloading} 0/{requests.Count}"));
 
-            await DownloaderHelper.DownloadSmallFilesAsync(
+            var webProxy = await GetWebProxy(blProxy, cancellationToken);
+            await DownloaderHelper.Instance.DownloadSmallFilesAsync(webProxy,
                 requests,
                 OnProgress,
-                linkedCts.Token);
-
-            if (firstError != null)
-            {
-                Logging.SaveLog(_tag, firstError);
-                Error?.Invoke(this, new ErrorEventArgs(firstError));
-            }
+                cancellationToken);
 
             void OnProgress(ReadOnlyMemory<FileDownloadState> states)
             {
-                if (cancellationToken.IsCancellationRequested || linkedCts.IsCancellationRequested)
-                {
-                    return;
-                }
+                cancellationToken.ThrowIfCancellationRequested();
                 var span = states.Span;
-                var successCount = 0;
-                double totalSpeed = 0;
-                long totalDownloadedBytes = 0;
-                long totalTotalBytes = 0;
-                List<string>? downloadingNames = null;
-
+                var completedCount = 0;
+                var downloadingStates = new List<FileDownloadState>();
                 foreach (ref readonly var item in span)
                 {
-                    if (item.Error != null)
-                    {
-                        if (Interlocked.CompareExchange(ref firstError, item.Error, null) == null)
-                        {
-                            linkedCts.Cancel();
-                        }
-                        continue;
-                    }
-
                     if (item.Completed)
                     {
-                        successCount++;
+                        completedCount++;
                     }
                     else if (item.TotalBytes > 0)
                     {
-                        totalSpeed += item.SpeedBytesPerSecond;
-                        totalDownloadedBytes += item.DownloadedBytes;
-                        totalTotalBytes += item.TotalBytes;
-                        downloadingNames ??= new List<string>(span.Length);
-                        downloadingNames.Add(item.Request.FileName);
+                        downloadingStates.Add(item);
                     }
                 }
-
-                var allSuccess = successCount == span.Length;
-                var downloadingFileName = downloadingNames != null ? string.Join(", ", downloadingNames) : string.Empty;
-
-                UpdateCompleted?.Invoke(this,
-                    new UpdateResult(allSuccess,
-                        $"{successCount}/{span.Length} | {Utils.HumanFy((long)totalSpeed / 1024)}/s {Utils.HumanFy(totalDownloadedBytes / 1024)}/{Utils.HumanFy(totalTotalBytes / 1024)} {downloadingFileName}"));
+                var totalSpeed = downloadingStates.Sum(x => x.SpeedBytesPerSecond);
+                var totalDownloadedBytes = downloadingStates.Sum(x => x.DownloadedBytes);
+                var totalTotalBytes = downloadingStates.Sum(x => x.TotalBytes);
+                var downloadingFileName = string.Join(", ", downloadingStates.Select(x => x.Request.FileName));
+                var allCompleted = completedCount == span.Length;
+                if (allCompleted)
+                {
+                    // check and throw errors if any
+                    FileDownloadState? failedState = null;
+                    foreach (ref readonly var item in span)
+                    {
+                        if (!item.IsFailed)
+                        {
+                            continue;
+                        }
+                        failedState = item;
+                        break;
+                    }
+                    if (failedState?.Error != null)
+                    {
+                        throw failedState.Error;
+                    }
+                }
+                UpdateCompleted?.Invoke(this, new UpdateResult(allCompleted, $"{completedCount}/{span.Length} | {Utils.HumanFy((long)totalSpeed / 1024)}/s {Utils.HumanFy(totalDownloadedBytes / 1024)}/{Utils.HumanFy(totalTotalBytes / 1024)} {downloadingFileName}"));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && firstError != null)
-        {
-            Logging.SaveLog(_tag, firstError);
-            Error?.Invoke(this, new ErrorEventArgs(firstError));
-        }
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
+
             Error?.Invoke(this, new ErrorEventArgs(ex));
+            if (ex.InnerException != null)
+            {
+                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+            }
         }
     }
 
     /// <summary>
-    ///     Gets redirect target URL without following redirects automatically.
+    /// Gets redirect target URL without following redirects automatically.
     /// </summary>
-    public async Task<string?> GetFinalUrlAsync(string url, CancellationToken cancellationToken = default)
+    public async Task<string?> UrlRedirectAsync(string url, bool blProxy, CancellationToken cancellationToken = default)
     {
-        using var client = new HttpClient(GetHandler(), false);
-        using var response = await client.GetAsync(url, cancellationToken);
-
-        var originalUri = new Uri(url);
-        var finalUri = response.RequestMessage?.RequestUri;
-        if (finalUri is not null && !Uri.Equals(originalUri, finalUri))
+        var webRequestHandler = new SocketsHttpHandler
         {
-            return finalUri.ToString();
+            AllowAutoRedirect = false,
+            Proxy = await GetWebProxy(blProxy, cancellationToken)
+        };
+        var certificateChainPolicy = CertPemManager.Instance.BuildCertificateChainPolicy();
+        if (certificateChainPolicy != null)
+        {
+            webRequestHandler.SslOptions.CertificateChainPolicy = certificateChainPolicy;
+            webRequestHandler.SslOptions.RemoteCertificateValidationCallback = null;
         }
+        using var client = new HttpClient(webRequestHandler);
 
-        Error?.Invoke(this, new ErrorEventArgs(new Exception("StatusCode error: " + response.StatusCode)));
-        Logging.SaveLog("StatusCode error: " + url);
-        return null;
+        var response = await client.GetAsync(url, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Redirect && response.Headers.Location is not null)
+        {
+            return response.Headers.Location.ToString();
+        }
+        else
+        {
+            Error?.Invoke(this, new ErrorEventArgs(new Exception("StatusCode error: " + response.StatusCode)));
+            Logging.SaveLog("StatusCode error: " + url);
+            return null;
+        }
     }
 
     /// <summary>
-    ///     Tries to download string content with a specified proxy.
+    /// Tries to download string content using proxy switch setting.
     /// </summary>
-    public async Task<string?> TryDownloadString(string url,
-        CancellationToken cancellationToken = default)
+    public async Task<string?> TryDownloadString(string url, bool blProxy, string userAgent, CancellationToken cancellationToken = default)
+    {
+        var webProxy = await GetWebProxy(blProxy, cancellationToken);
+        return await TryDownloadString(url, webProxy, userAgent, cancellationToken);
+    }
+
+    /// <summary>
+    /// Tries to download string content with a specified proxy.
+    /// </summary>
+    public async Task<string?> TryDownloadString(string url, IWebProxy? webProxy, string userAgent, CancellationToken cancellationToken = default)
     {
         try
         {
-            var result1 = await DownloadStringAsync(url, cancellationToken);
+            var result1 = await DownloadStringAsync(url, webProxy, userAgent, cancellationToken);
             if (result1.IsNotEmpty())
             {
                 return result1;
@@ -275,7 +227,7 @@ public class DownloadService : IDisposable
 
         try
         {
-            var result2 = await DownloadStringViaDownloader(url, cancellationToken);
+            var result2 = await DownloadStringViaDownloader(url, webProxy, userAgent, cancellationToken);
             if (result2.IsNotEmpty())
             {
                 return result2;
@@ -299,25 +251,48 @@ public class DownloadService : IDisposable
     }
 
     /// <summary>
-    ///     Downloads string content via HttpClient.
+    /// Downloads string content via HttpClient.
     /// </summary>
-    private async Task<string?> DownloadStringAsync(string url,
-        CancellationToken cancellationToken = default)
+    private async Task<string?> DownloadStringAsync(string url, IWebProxy? webProxy, string userAgent, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var client = new HttpClient(GetHandler(), false);
+            var handler = new SocketsHttpHandler
+            {
+                Proxy = webProxy,
+                UseProxy = webProxy != null,
+                AutomaticDecompression = DecompressionMethods.All,
+                ConnectTimeout = webProxy is null ? Global.DirectDownloadConnect : Global.ProxyDownloadConnect,
+            };
+            var certificateChainPolicy = CertPemManager.Instance.BuildCertificateChainPolicy();
+            if (certificateChainPolicy != null)
+            {
+                handler.SslOptions.CertificateChainPolicy = certificateChainPolicy;
+                handler.SslOptions.RemoteCertificateValidationCallback = null;
+            }
+
+            using var client = new HttpClient(HttpRequestHeadersHelper.CreateHandler(handler, RequestHeaders));
             client.Timeout = Timeout.InfiniteTimeSpan;
 
-            var uri = new Uri(url);
+            if (userAgent.IsNullOrEmpty())
+            {
+                userAgent = Utils.GetVersion(false);
+            }
+            client.DefaultRequestHeaders.UserAgent.TryParseAdd(userAgent);
+            if (AcceptHeader.IsNotEmpty())
+            {
+                client.DefaultRequestHeaders.Accept.ParseAdd(AcceptHeader);
+            }
+
+            Uri uri = new(url);
+            //Authorization Header
             if (uri.UserInfo.IsNotEmpty())
             {
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Utils.Base64Encode(uri.UserInfo));
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Utils.Base64Encode(uri.UserInfo));
             }
 
             using var timeoutCts = new CancellationTokenSource();
-            timeoutCts.CancelAfter(Global.ProxyFetch);
+            timeoutCts.CancelAfter(webProxy is null ? Global.DirectFetch : Global.ProxyFetch);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
             return await client.GetStringAsync(url, linkedCts.Token);
@@ -340,16 +315,17 @@ public class DownloadService : IDisposable
     }
 
     /// <summary>
-    ///     Downloads string content via DownloaderHelper.
+    /// Downloads string content via DownloaderHelper.
     /// </summary>
-    private async Task<string?> DownloadStringViaDownloader(string url,
-        CancellationToken cancellationToken = default)
+    private async Task<string?> DownloadStringViaDownloader(string url, IWebProxy? webProxy, string userAgent, CancellationToken cancellationToken = default)
     {
         try
         {
-            var result =
-                await DownloaderHelper.DownloadStringAsync(url,
-                    cancellationToken);
+            if (userAgent.IsNullOrEmpty())
+            {
+                userAgent = Utils.GetVersion(false);
+            }
+            var result = await DownloaderHelper.Instance.DownloadStringAsync(webProxy, url, userAgent, RequestHeaders, AcceptHeader, cancellationToken);
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -369,16 +345,16 @@ public class DownloadService : IDisposable
     }
 
     /// <summary>
-    ///     Creates local SOCKS proxy when proxy switch is enabled.
+    /// Creates local SOCKS proxy when proxy switch is enabled.
     /// </summary>
-    public static async Task<WebProxy?> CheckProxy(bool blProxy, CancellationToken cancellationToken = default)
+    private async Task<WebProxy?> GetWebProxy(bool blProxy, CancellationToken cancellationToken = default)
     {
         if (!blProxy)
         {
             return null;
         }
         var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
-        if (!await SocksPortCheck(Global.Loopback, port, cancellationToken))
+        if (await SocksPortCheck(Global.Loopback, port, cancellationToken) == false)
         {
             return null;
         }
@@ -387,9 +363,9 @@ public class DownloadService : IDisposable
     }
 
     /// <summary>
-    ///     Checks whether the specified TCP endpoint is reachable.
+    /// Checks whether the specified TCP endpoint is reachable.
     /// </summary>
-    private static async Task<bool> SocksPortCheck(string ip, int port, CancellationToken cancellationToken = default)
+    private async Task<bool> SocksPortCheck(string ip, int port, CancellationToken cancellationToken = default)
     {
         using var rootTimeOutCts = new CancellationTokenSource(Global.LocalFetch);
         using var rootCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, rootTimeOutCts.Token);
@@ -448,22 +424,5 @@ public class DownloadService : IDisposable
             }
         }
         return false;
-    }
-
-    private HttpMessageHandler GetHandler()
-    {
-        return Handler;
-    }
-
-    public void Dispose()
-    {
-        if (!DisposeHandler)
-        {
-            return;
-        }
-        if (Handler is IDisposable disposableHandler)
-        {
-            disposableHandler.Dispose();
-        }
     }
 }

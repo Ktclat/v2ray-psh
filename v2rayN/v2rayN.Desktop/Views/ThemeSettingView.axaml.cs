@@ -1,3 +1,4 @@
+using Avalonia.Data;
 using v2rayN.Desktop.ViewModels;
 
 namespace v2rayN.Desktop.Views;
@@ -15,6 +16,8 @@ public partial class ThemeSettingView : ReactiveUserControl<ThemeSettingViewMode
         cmbCurrentTheme.ItemsSource = Utils.GetEnumNames<ETheme>();
         cmbCurrentFontSize.ItemsSource = Enumerable.Range(Global.MinFontSize, Global.MinFontSizeCount).ToList();
         cmbCurrentLanguage.ItemsSource = Global.LanguageOptions;
+        cmbCurrentLanguage.DisplayMemberBinding = new Binding(nameof(LanguageOption.Display));
+        cmbCurrentLanguage.SelectedValueBinding = new Binding(nameof(LanguageOption.Value));
 
         this.WhenActivated(disposables =>
         {

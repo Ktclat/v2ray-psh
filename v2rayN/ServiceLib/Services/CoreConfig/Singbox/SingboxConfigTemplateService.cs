@@ -53,64 +53,29 @@ public partial class CoreConfigSingboxService
                 customOutboundContent = customOutboundContent.Replace("{{tag}}", outboundTag);
                 customOutboundContent = customOutboundContent.Replace("{{detour}}", outboundDetour);
                 customOutboundContent = customOutboundContent.Replace("{{interface}}", outboundBindInterface);
-                var customOutboundNode = JsonUtils.ParseJson(customOutboundContent);
-
-                JsonObject customOutboundObj;
-                JsonObject customOutboundDialingObj;
-                if (customOutboundNode is JsonArray jsonArray)
-                {
-                    // NOTE: When the custom outbound definition is an array,
-                    // treat it as an outbound proxy chain:
-                    // apply outbound-level settings (such as the tag) to the first element,
-                    // and apply dialing settings (such as the detour) to the last element.
-                    if (jsonArray.Count == 0
-                        || jsonArray[0] is not JsonObject firstObj
-                        || jsonArray[^1] is not JsonObject lastObj)
-                    {
-                        continue;
-                    }
-                    customOutboundObj = firstObj;
-                    customOutboundDialingObj = lastObj;
-                }
-                else if (customOutboundNode is JsonObject jsonObject)
-                {
-                    customOutboundObj = jsonObject;
-                    customOutboundDialingObj = jsonObject;
-                }
-                else
-                {
-                    continue;
-                }
+                var customOutboundObj = JsonUtils.ParseJson(customOutboundContent) as JsonObject;
 
                 if (!containTagPlaceholder)
                 {
-                    customOutboundObj["tag"] = outboundTag;
+                    customOutboundObj?["tag"] = outboundTag;
                 }
                 if (!containDetourPlaceholder && !outboundDetour.IsNullOrEmpty())
                 {
-                    customOutboundDialingObj["detour"] = outboundDetour;
+                    customOutboundObj?["detour"] = outboundDetour;
+                }
+                else if (outboundDetour.IsNullOrEmpty())
+                {
+                    customOutboundObj?.Remove("detour");
                 }
                 if (!containBindInterfacePlaceholder && !outboundBindInterface.IsNullOrEmpty())
                 {
-                    customOutboundDialingObj["bind_interface"] = outboundBindInterface;
+                    customOutboundObj?["bind_interface"] = outboundBindInterface;
                 }
 
                 var index = jsonArrayOutbounds
                     .Select((node, idx) => new { node, idx })
                     .FirstOrDefault(x => x.node?["tag"]?.ToString() == outboundTag)?.idx ?? -1;
-                if (index == -1)
-                {
-                    continue;
-                }
-                if (customOutboundNode is JsonArray customOutboundArray)
-                {
-                    jsonArrayOutbounds.RemoveAt(index);
-                    foreach (var item in customOutboundArray)
-                    {
-                        jsonArrayOutbounds.Insert(index++, item?.DeepClone());
-                    }
-                }
-                else
+                if (index != -1)
                 {
                     jsonArrayOutbounds[index] = customOutboundObj;
                 }
@@ -180,7 +145,7 @@ public partial class CoreConfigSingboxService
 
     private void ApplyOutboundBindInterface()
     {
-        var bindInterface = NetworkUtils.GetRealBindInterfaceName(_config.CoreBasicItem.BindInterface);
+        var bindInterface = _config.CoreBasicItem.BindInterface?.TrimEx();
         if (bindInterface.IsNullOrEmpty())
         {
             return;
