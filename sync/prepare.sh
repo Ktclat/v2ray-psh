@@ -12,6 +12,10 @@ git config core.autocrlf false
 git fetch --no-tags https://github.com/2dust/v2rayN.git "$base"
 [[ "$(git rev-parse FETCH_HEAD)" == "$base" ]]
 git -c advice.detachedHead=false checkout --quiet --detach "$base"
+# The desktop build uses one upstream-pinned submodule. No recursive downloads.
+[[ "$(git ls-files --stage | awk '$1 == "160000" {print $4}')" == v2rayN/GlobalHotKeys ]]
+[[ "$(git config -f .gitmodules --get submodule.v2rayN/GlobalHotKeys.url)" == https://github.com/2dust/GlobalHotKeys ]]
+git submodule update --init -- v2rayN/GlobalHotKeys >&2
 # If upstream changes the affected integration points, stop rather than guess or ship unpatched code.
 git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --check --index -
 git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --index -
