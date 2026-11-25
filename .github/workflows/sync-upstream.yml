@@ -1,11 +1,11 @@
-name: Sync v2rayN and publish Windows build
+name: Sync stable v2rayN release
 
 on:
   schedule:
-    - cron: '27 */6 * * *'
+    - cron: '2-57/5 * * * *'
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, test/stable-release-sync]
     paths:
       - '.github/workflows/sync-upstream.yml'
       - 'patches/**'
@@ -16,16 +16,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: v2ray-psh-upstream
+  group: v2ray-psh-upstream-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   detect:
-    if: github.repository == 'Ktclat/v2ray-psh' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Ktclat/v2ray-psh' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/stable-release-sync')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       base: ${{ steps.detect.outputs.base }}
+      upstream_tag: ${{ steps.detect.outputs.upstream_tag }}
       release_tag: ${{ steps.detect.outputs.release_tag }}
       update: ${{ steps.detect.outputs.update }}
     steps:
@@ -39,11 +40,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          result="$(git ls-remote --exit-code https://github.com/2dust/v2rayN.git refs/heads/master)"
-          read -r base ref <<< "$result"
-          [[ "$base" =~ ^[0-9a-f]{40}$ && "$ref" == refs/heads/master ]]
-          patch="$(sha256sum patches/terminal-commands.patch)"
-          tag="psh-${base:0:12}-${patch:0:12}"
+          upstream_tag="$(bash sync/resolve-release.sh)"
+          # Prefer the peeled commit for annotated tags; accept a lightweight tag as well.
+          ref="refs/tags/$upstream_tag"
+          refs="$(git ls-remote --exit-code https://github.com/2dust/v2rayN.git "$ref" "$ref^{}")"
+          base="$(awk -v ref="$ref" '$2 == ref { direct=$1 } $2 == ref "^{}" { peeled=$1 } END { print peeled ? peeled : direct }' <<< "$refs")"
+          [[ "$base" =~ ^[0-9a-f]{40}$ ]]
+          digest="$(git show HEAD:patches/terminal-commands.patch | sha256sum)"
+          legacy="$(git show HEAD:patches/terminal-commands-legacy-wpf.patch | sha256sum)"
+          patch="$(printf '%s\n%s\n' "$digest" "$legacy" | sha256sum)"
+          tag="psh-$upstream_tag-${base:0:12}-${patch:0:12}"
+          echo "Upstream stable release $upstream_tag ($base)"
           response="$RUNNER_TEMP/v2ray-psh-release.json"
           status="$(curl --silent --show-error --max-time 30 --retry 2 --output "$response" --write-out '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -51,13 +58,13 @@ jobs:
           case "$status" in
             404) update=true ;;
             200)
-              jq -e '(.draft == false) and (.assets | length == 2)' "$response" >/dev/null
+              jq -e '(.draft == false) and ([.assets[] | select(.state == "uploaded") | .name] | sort == ["SHA256SUMS.txt", "v2ray-psh-win-x64.zip"])' "$response" >/dev/null
               update=false
               echo "Already published: $tag"
               ;;
             *) echo "Cannot establish release state: HTTP $status" >&2; exit 1 ;;
           esac
-          printf 'base=%s\nrelease_tag=%s\nupdate=%s\n' "$base" "$tag" "$update" >> "$GITHUB_OUTPUT"
+          printf 'base=%s\nupstream_tag=%s\nrelease_tag=%s\nupdate=%s\n' "$base" "$upstream_tag" "$tag" "$update" >> "$GITHUB_OUTPUT"
 
   windows:
     needs: detect
@@ -68,6 +75,7 @@ jobs:
       tree: ${{ steps.patch.outputs.tree }}
     env:
       UPSTREAM_SHA: ${{ needs.detect.outputs.base }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -103,10 +111,12 @@ jobs:
           $root = Join-Path $PWD 'dist'
           $output = Join-Path $root 'v2ray-psh'
           dotnet build "$src/v2rayN.Desktop/v2rayN.Desktop.csproj" -c Release -r win-x64
-          dotnet publish "$src/v2rayN.Windows/v2rayN.Windows.csproj" -c Release -r win-x64 --self-contained true -o $output
+          $project = "$src/v2rayN.Windows/v2rayN.Windows.csproj"
+          if (-not (Test-Path $project -PathType Leaf)) { $project = "$src/v2rayN/v2rayN/v2rayN.csproj" }
+          dotnet publish $project -c Release -r win-x64 --self-contained true -o $output
           if (-not (Test-Path "$output/v2rayN.exe" -PathType Leaf)) { throw 'Expected WPF executable not found' }
           Copy-Item upstream/LICENSE "$output/LICENSE"
-          Set-Content "$output/UPSTREAM.txt" "Source: https://github.com/2dust/v2rayN/commit/$env:UPSTREAM_SHA`nThis non-official build does not bundle proxy cores."
+          Set-Content "$output/UPSTREAM.txt" "Upstream release: $env:UPSTREAM_TAG`nSource: https://github.com/2dust/v2rayN/commit/$env:UPSTREAM_SHA`nThis non-official build does not bundle proxy cores."
           Compress-Archive -Path $output -DestinationPath (Join-Path $root 'v2ray-psh-win-x64.zip')
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -117,13 +127,14 @@ jobs:
 
   publish:
     needs: [detect, windows]
-    if: needs.windows.result == 'success'
+    if: github.repository == 'Ktclat/v2ray-psh' && github.ref == 'refs/heads/main' && needs.windows.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     env:
       UPSTREAM_SHA: ${{ needs.detect.outputs.base }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
       RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
       EXPECTED_TREE: ${{ needs.windows.outputs.tree }}
     steps:
@@ -138,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^psh-[0-9a-f]{12}-[0-9a-f]{12}$ && "$EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^psh-v?[0-9]+(\.[0-9]+){1,3}-[0-9a-f]{12}-[0-9a-f]{12}$ && "$EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
           tree="$(bash sync/prepare.sh "$UPSTREAM_SHA" upstream)"
           [[ "$tree" == "$EXPECTED_TREE" ]] || { echo "Source tree changed between jobs" >&2; exit 1; }
           python3 - <<'PY'
@@ -179,7 +190,8 @@ jobs:
           cat > "$RUNNER_TEMP/psh-release-notes.md" <<NOTES
           Unofficial v2rayN Windows x64 WPF build with separate CMD and PowerShell tray commands.
 
-          - Upstream: https://github.com/2dust/v2rayN/commit/$UPSTREAM_SHA
+          - Upstream stable release: https://github.com/2dust/v2rayN/releases/tag/$UPSTREAM_TAG
+          - Exact upstream source: https://github.com/2dust/v2rayN/commit/$UPSTREAM_SHA
           - Complete corresponding source (GPL-3.0): https://github.com/$GITHUB_REPOSITORY/tree/$commit
           - Self-contained .NET build; proxy cores are not bundled.
           - CMD, PowerShell 7, Windows PowerShell 5.1 and both Windows menu builds were checked.

@@ -16,9 +16,18 @@ git -c advice.detachedHead=false checkout --quiet --detach "$base"
 [[ "$(git ls-files --stage | awk '$1 == "160000" {print $4}')" == v2rayN/GlobalHotKeys ]]
 [[ "$(git config -f .gitmodules --get submodule.v2rayN/GlobalHotKeys.url)" == https://github.com/2dust/GlobalHotKeys ]]
 git submodule update --init -- v2rayN/GlobalHotKeys >&2
-# If upstream changes the affected integration points, stop rather than guess or ship unpatched code.
-git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --check --index -
-git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --index -
+# v2rayN 7.x uses the original WPF project name; 8.x renamed it.
+# Select the known layout first. Never fall through to other patches after a conflict.
+if [[ -f v2rayN/v2rayN.Windows/v2rayN.Windows.csproj && ! -f v2rayN/v2rayN/v2rayN.csproj ]]; then
+    patch=patches/terminal-commands.patch
+elif [[ -f v2rayN/v2rayN/v2rayN.csproj && ! -f v2rayN/v2rayN.Windows/v2rayN.Windows.csproj ]]; then
+    patch=patches/terminal-commands-legacy-wpf.patch
+else
+    echo "Unrecognized WPF project layout" >&2
+    exit 1
+fi
+git -C "$here" show "HEAD:$patch" | git apply --check --index -
+git -C "$here" show "HEAD:$patch" | git apply --index -
 git diff --cached --check "$base" -- v2rayN
 # Keep upstream build files and source, but do not install somebody else's Actions in this repository.
 git rm -rq -- .github/workflows
