@@ -58,9 +58,13 @@ jobs:
           case "$status" in
             404) update=true ;;
             200)
-              jq -e '(.draft == false) and ([.assets[] | select(.state == "uploaded") | .name] | sort == ["SHA256SUMS.txt", "v2ray-psh-win-x64.zip"])' "$response" >/dev/null
-              update=false
-              echo "Already published: $tag"
+              if jq -e '.draft == true' "$response" >/dev/null; then
+                update=true
+              else
+                jq -e '(.draft == false) and ([.assets[] | select(.state == "uploaded") | .name] | sort == ["SHA256SUMS.txt", "v2ray-psh-win-x64.zip"])' "$response" >/dev/null
+                update=false
+                echo "Already published: $tag"
+              fi
               ;;
             *) echo "Cannot establish release state: HTTP $status" >&2; exit 1 ;;
           esac
@@ -172,6 +176,7 @@ jobs:
           [[ "$GITHUB_REPOSITORY" == Ktclat/v2ray-psh && "$GITHUB_REF" == refs/heads/main ]]
           remote="https://github.com/$GITHUB_REPOSITORY.git"
           parents=()
+          commit=
           previous="$(git ls-remote "$remote" refs/heads/patched)"
           if [[ -n "$previous" ]]; then
             read -r parent ref <<< "$previous"
@@ -179,14 +184,26 @@ jobs:
             git -C upstream fetch --no-tags "$remote" refs/heads/patched
             [[ "$(git -C upstream rev-parse FETCH_HEAD)" == "$parent" ]]
             parents=(-p "$parent")
+            if [[ "$(git -C upstream rev-parse "$parent^{tree}")" == "$EXPECTED_TREE" ]] &&
+               git -C upstream log -1 --format=%B "$parent" | grep -Fx "Patch release $RELEASE_TAG"; then
+              commit="$parent"
+            fi
           fi
           export GIT_AUTHOR_NAME='github-actions[bot]' GIT_COMMITTER_NAME='github-actions[bot]'
           export GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
           export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-          commit="$(printf 'Track 2dust/v2rayN %s\n\nPatch release %s\n' "$UPSTREAM_SHA" "$RELEASE_TAG" |
-            git -C upstream commit-tree "$EXPECTED_TREE" "${parents[@]}")"
+          if [[ -z "$commit" ]]; then
+            commit="$(printf 'Track 2dust/v2rayN %s\n\nPatch release %s\n' "$UPSTREAM_SHA" "$RELEASE_TAG" |
+              git -C upstream commit-tree "$EXPECTED_TREE" "${parents[@]}")"
+          fi
+          tag_ref="refs/tags/$RELEASE_TAG"
+          existing_tag="$(git ls-remote "$remote" "$tag_ref")"
+          if [[ -n "$existing_tag" ]]; then
+            read -r tagged ref <<< "$existing_tag"
+            [[ "$tagged" == "$commit" && "$ref" == "$tag_ref" ]]
+          fi
           git -C upstream -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-            push "$remote" "$commit:refs/heads/patched"
+            push --atomic "$remote" "$commit:refs/heads/patched" "$commit:$tag_ref"
           cat > "$RUNNER_TEMP/psh-release-notes.md" <<NOTES
           Unofficial v2rayN Windows x64 WPF build with separate CMD and PowerShell tray commands.
 
@@ -196,6 +213,37 @@ jobs:
           - Self-contained .NET build; proxy cores are not bundled.
           - CMD, PowerShell 7, Windows PowerShell 5.1 and both Windows menu builds were checked.
           NOTES
-          gh release create "$RELEASE_TAG" dist/v2ray-psh-win-x64.zip dist/SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --target "$commit" --title "$RELEASE_TAG (Windows x64)" \
-            --notes-file "$RUNNER_TEMP/psh-release-notes.md" --prerelease
+          # Reuse a draft left by a failed upload. Never modify a published release.
+          draft_info() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -ser --arg tag "$RELEASE_TAG" 'add | map(select(.tag_name == $tag)) |
+                if length == 0 then "missing"
+                elif length == 1 and .[0].draft then (.[0].id | tostring)
+                else error("Expected at most one matching draft and no published release") end'
+          }
+          id="$(draft_info)"
+          if [[ "$id" == missing ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --draft --prerelease --title "$RELEASE_TAG (Windows x64)" \
+              --notes-file "$RUNNER_TEMP/psh-release-notes.md"
+            id="$(draft_info)"
+          fi
+          [[ "$id" =~ ^[0-9]+$ ]]
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/psh-release-notes.md"
+          # Upload into the unpublished draft; GitHub sometimes returns a transient 5xx.
+          for name in v2ray-psh-win-x64.zip SHA256SUMS.txt; do
+            for attempt in 1 2 3; do
+              gh release upload "$RELEASE_TAG" "dist/$name" --repo "$GITHUB_REPOSITORY" --clobber && break
+              [[ "$attempt" != 3 ]] || exit 1
+              sleep "$((attempt * 10))"
+            done
+          done
+          zip_digest="sha256:$(cut -d' ' -f1 dist/SHA256SUMS.txt)"
+          sums_digest="sha256:$(sha256sum dist/SHA256SUMS.txt | cut -d' ' -f1)"
+          api_path="repos/$GITHUB_REPOSITORY/releases/$id"
+          gh api "$api_path" | jq -e --arg zip "$zip_digest" --arg sums "$sums_digest" '
+            .draft and .prerelease and
+            ([.assets[] | select(.state == "uploaded") | {key: .name, value: .digest}] | from_entries)
+            == {"SHA256SUMS.txt": $sums, "v2ray-psh-win-x64.zip": $zip}' >/dev/null
+          gh api --method PATCH "$api_path" -F draft=false |
+            jq -e 'select(.draft == false and .prerelease == true).html_url'
