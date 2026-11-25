@@ -13,8 +13,8 @@ git fetch --no-tags https://github.com/2dust/v2rayN.git "$base"
 [[ "$(git rev-parse FETCH_HEAD)" == "$base" ]]
 git -c advice.detachedHead=false checkout --quiet --detach "$base"
 # If upstream changes the affected integration points, stop rather than guess or ship unpatched code.
-git apply --check --index "$here/patches/terminal-commands.patch"
-git apply --index "$here/patches/terminal-commands.patch"
+git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --check --index -
+git -C "$here" show HEAD:patches/terminal-commands.patch | git apply --index -
 git diff --cached --check "$base" -- v2rayN
 # Keep upstream build files and source, but do not install somebody else's Actions in this repository.
 git rm -rq -- .github/workflows
