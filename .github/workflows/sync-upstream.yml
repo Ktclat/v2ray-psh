@@ -112,7 +112,7 @@ jobs:
           $output = Join-Path $root 'v2ray-psh'
           dotnet build "$src/v2rayN.Desktop/v2rayN.Desktop.csproj" -c Release -r win-x64
           $project = "$src/v2rayN.Windows/v2rayN.Windows.csproj"
-          if (-not (Test-Path $project -PathType Leaf)) { $project = "$src/v2rayN/v2rayN/v2rayN.csproj" }
+          if (-not (Test-Path $project -PathType Leaf)) { $project = "$src/v2rayN/v2rayN.csproj" }
           dotnet publish $project -c Release -r win-x64 --self-contained true -o $output
           if (-not (Test-Path "$output/v2rayN.exe" -PathType Leaf)) { throw 'Expected WPF executable not found' }
           Copy-Item upstream/LICENSE "$output/LICENSE"
